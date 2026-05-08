@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Camera — Sentinel Atlas</title>
+  <meta name="description" content="Real-time camera-to-satellite mosaic — match webcam patches to Sentinel-2 imagery." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300&family=DM+Mono:wght@300;400&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/static/style.css?v=4" />
+</head>
+<body>
+
+<header>
+  <h1>Sentinel <em>Atlas</em></h1>
+  <div id="status-pill">Initialising…</div>
+</header>
+
+<nav class="site-nav">
+  <a href="/cam" class="nav-link active">Cam</a>
+  <a href="/convert" class="nav-link">Convert</a>
+  <a href="/explore" class="nav-link">Explore</a>
+</nav>
+
+<div class="layout">
+
+  <!-- ── SIDEBAR ──────────────────────────────────────────────────────────── -->
+  <aside>
+    <div class="sidebar-content">
+
+      <div>
+        <span class="s-label">Real-time Mosaic</span>
+        <div class="sidebar-hint">
+          Stream your webcam and match each segment to the closest
+          satellite image in the database.
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:10px; margin-bottom:14px">
+        <button id="btn-start-camera" class="primary" disabled>Start Camera</button>
+        <button id="btn-stop-camera" disabled>Stop Camera</button>
+      </div>
+
+      <div class="camera-preview">
+        <video id="camera-video" autoplay playsinline muted></video>
+      </div>
+
+      <canvas id="camera-canvas" width="800" height="800" style="display:none;"></canvas>
+
+      <!-- Index info -->
+      <div style="margin-top: 20px">
+        <span class="s-label">Index</span>
+        <div class="info-line">
+          <span id="n-vectors">—</span> patches indexed
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- ── MAIN ─────────────────────────────────────────────────────────────── -->
+  <main id="main-area">
+
+    <!-- Idle placeholder -->
+    <div id="idle-wrapper">
+      <div id="idle-grid"></div>
+    </div>
+
+    <!-- Live grid — hidden until camera starts -->
+    <div id="grid-outer" style="display:none">
+      <div class="compass-wrap" id="compass-wrap">
+        <div id="grid-wrapper"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-msg">Working…</div>
+</div>
+
+<!-- Global floating tooltip -->
+<div class="tooltip" id="gtooltip"></div>
+
+<script src="/static/cam.js?v=4"></script>
+</body>
+</html>

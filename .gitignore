@@ -1,0 +1,19 @@
+# Data
+data_collection/data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Environments
+.env
+.env.local
+
+# Databases
+*.sqlite
+qdrant_storage/
+qdrant_hog_hybrid/

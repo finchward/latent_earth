@@ -14,7 +14,7 @@ from config import PORT
 if __name__ == "__main__":
     def _open_browser():
         time.sleep(1.8)
-        webbrowser.open(f"http://localhost:{PORT}")
+        webbrowser.open(f"http://localhost:{PORT}/cam")
 
     threading.Thread(target=_open_browser, daemon=True).start()
 
