@@ -33,34 +33,33 @@
 
       <div>
         <span class="s-label">Upload Image</span>
-        <div class="sidebar-hint">
-          Drag &amp; drop or click to upload an image. It will be
-          center-cropped to a square and converted into a satellite mosaic.
-        </div>
-      </div>
-
-      <div id="upload-zone" class="upload-zone">
-        <div class="upload-zone-inner">
-          <div class="upload-icon">↑</div>
-          <div class="upload-text">Drop image here</div>
-          <div class="upload-sub">or click to browse</div>
-        </div>
-        <input type="file" id="file-input" accept="image/*" style="display:none" />
-      </div>
-
-      <!-- Settings — shown after image upload -->
-      <div id="settings-panel" style="display:none">
-
-        <span class="s-label" style="margin-top:18px">Settings</span>
-
-        <div class="setting-group">
-          <label class="setting-label" for="slider-ppp">Pixels per patch</label>
-          <div class="setting-row">
-            <input type="range" id="slider-ppp" min="25" max="200" step="25" value="100" />
-            <span id="val-ppp" class="setting-val">100</span>
+          <div class="sidebar-hint">
+            Drag &amp; drop or click to upload an image. It will be
+            converted into a satellite mosaic using a centered grid.
           </div>
-          <div class="setting-hint" id="grid-info">8 × 8 grid · 64 patches</div>
         </div>
+
+        <div id="upload-zone" class="upload-zone">
+          <div class="upload-zone-inner">
+            <div class="upload-icon">↑</div>
+            <div class="upload-text">Drop image here</div>
+            <div class="upload-sub">or click to browse</div>
+          </div>
+          <input type="file" id="file-input" accept="image/*" style="display:none" />
+        </div>
+
+        <!-- Settings — shown after image upload -->
+        <div id="settings-panel" style="display:none">
+
+          <span class="s-label" style="margin-top:18px">Settings</span>
+
+          <div class="setting-group">
+            <label class="setting-label" for="slider-ppp">Pixels per patch</label>
+            <div class="setting-row">
+              <input type="range" id="slider-ppp" min="25" max="200" step="1" value="100" />
+              <span id="val-ppp" class="setting-val">100</span>
+            </div>
+            <div class="setting-hint" id="grid-info">...</div>
 
         <div class="setting-group">
           <label class="setting-label">Output scale</label>

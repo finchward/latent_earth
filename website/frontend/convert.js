@@ -87,41 +87,60 @@ function updatePreview() {
   const canvas = $('preview-canvas');
   const ctx = canvas.getContext('2d');
 
-  const srcSide = Math.min(uploadedImage.width, uploadedImage.height);
-  const sx = (uploadedImage.width - srcSide) / 2;
-  const sy = (uploadedImage.height - srcSide) / 2;
+  // Cap resolution logic (same as backend)
+  const MAX_RESOLUTION = 2000;
+  let w = uploadedImage.width;
+  let h = uploadedImage.height;
+  if (w > MAX_RESOLUTION || h > MAX_RESOLUTION) {
+    const scale = MAX_RESOLUTION / Math.max(w, h);
+    w = Math.floor(w * scale);
+    h = Math.floor(h * scale);
+  }
 
-  // Display size (max 500px)
-  const displaySize = Math.min(srcSide, 500);
-  canvas.width = displaySize;
-  canvas.height = displaySize;
+  // Display scale (fit within 500x500)
+  const displayScale = Math.min(1, 500 / Math.max(w, h));
+  const dw = Math.floor(w * displayScale);
+  const dh = Math.floor(h * displayScale);
+  canvas.width = dw;
+  canvas.height = dh;
 
-  // Draw image (center-cropped)
-  ctx.drawImage(uploadedImage, sx, sy, srcSide, srcSide, 0, 0, displaySize, displaySize);
+  // Draw full image
+  ctx.drawImage(uploadedImage, 0, 0, dw, dh);
 
   // Grid overlay
-  const effectiveSide = Math.min(srcSide, 2000);
-  const n = Math.max(1, Math.floor(effectiveSide / pixelsPerPatch));
-  const gridPx = displaySize / n;
+  const cols = Math.max(1, Math.floor(w / pixelsPerPatch));
+  const rows = Math.max(1, Math.floor(h / pixelsPerPatch));
 
-  // White lines
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+  const gridW = cols * pixelsPerPatch;
+  const gridH = rows * pixelsPerPatch;
+  
+  // Display offsets
+  const ox = ((w - gridW) / 2) * displayScale;
+  const oy = ((h - gridH) / 2) * displayScale;
+  const gapW = pixelsPerPatch * displayScale;
+  const gapH = pixelsPerPatch * displayScale;
+
+  // Overlay for cropped areas
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+  ctx.fillRect(0, 0, dw, oy); // Top
+  ctx.fillRect(0, oy + gridH * displayScale, dw, dh - (oy + gridH * displayScale)); // Bottom
+  ctx.fillRect(0, oy, ox, gridH * displayScale); // Left
+  ctx.fillRect(ox + gridW * displayScale, oy, dw - (ox + gridW * displayScale), gridH * displayScale); // Right
+
+  // White grid lines
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
   ctx.lineWidth = 1;
-  for (let i = 1; i < n; i++) {
-    const pos = Math.round(i * gridPx);
-    ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, displaySize); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(displaySize, pos); ctx.stroke();
+  for (let i = 0; i <= cols; i++) {
+    const x = Math.round(ox + i * gapW);
+    ctx.beginPath(); ctx.moveTo(x, oy); ctx.lineTo(x, oy + gridH * displayScale); ctx.stroke();
   }
-  // Dark shadow lines for contrast
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.2)';
-  for (let i = 1; i < n; i++) {
-    const pos = Math.round(i * gridPx) + 1;
-    ctx.beginPath(); ctx.moveTo(pos, 0); ctx.lineTo(pos, displaySize); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, pos); ctx.lineTo(displaySize, pos); ctx.stroke();
+  for (let i = 0; i <= rows; i++) {
+    const y = Math.round(oy + i * gapH);
+    ctx.beginPath(); ctx.moveTo(ox, y); ctx.lineTo(ox + gridW * displayScale, y); ctx.stroke();
   }
 
   // Update info text
-  $('grid-info').textContent = `${n} × ${n} grid · ${n * n} patches`;
+  $('grid-info').textContent = `${cols} × ${rows} grid · ${cols * rows} patches`;
   updateOutputInfo();
 }
 
@@ -145,12 +164,20 @@ document.querySelectorAll('.scale-btn').forEach(btn => {
 
 function updateOutputInfo() {
   if (!uploadedImage) return;
-  const effectiveSide = Math.min(
-    Math.min(uploadedImage.width, uploadedImage.height), 2000
-  );
-  const n = Math.max(1, Math.floor(effectiveSide / pixelsPerPatch));
-  const outSize = n * pixelsPerPatch * outputScale;
-  $('output-info').textContent = `Output: ${outSize} × ${outSize} px`;
+  const MAX_RESOLUTION = 2000;
+  let w = uploadedImage.width;
+  let h = uploadedImage.height;
+  if (w > MAX_RESOLUTION || h > MAX_RESOLUTION) {
+    const scale = MAX_RESOLUTION / Math.max(w, h);
+    w = Math.floor(w * scale);
+    h = Math.floor(h * scale);
+  }
+  const cols = Math.max(1, Math.floor(w / pixelsPerPatch));
+  const rows = Math.max(1, Math.floor(h / pixelsPerPatch));
+  
+  const outW = cols * pixelsPerPatch * outputScale;
+  const outH = rows * pixelsPerPatch * outputScale;
+  $('output-info').textContent = `Output: ${outW} × ${outH} px`;
 }
 
 function updateConvertButton() {
@@ -161,17 +188,20 @@ function updateConvertButton() {
 $('btn-convert').addEventListener('click', async () => {
   if (!uploadedImage || !appReady) return;
 
-  // Re-encode at full resolution (center-cropped, capped at 2000)
-  const srcSide = Math.min(uploadedImage.width, uploadedImage.height);
-  const side = Math.min(srcSide, 2000);
+  // Re-encode at full resolution (maintaining aspect ratio, capped at 2000)
+  const MAX_RESOLUTION = 2000;
+  let w = uploadedImage.width;
+  let h = uploadedImage.height;
+  if (w > MAX_RESOLUTION || h > MAX_RESOLUTION) {
+    const scale = MAX_RESOLUTION / Math.max(w, h);
+    w = Math.floor(w * scale);
+    h = Math.floor(h * scale);
+  }
   const tmpCanvas = document.createElement('canvas');
-  tmpCanvas.width = side;
-  tmpCanvas.height = side;
+  tmpCanvas.width = w;
+  tmpCanvas.height = h;
   const tctx = tmpCanvas.getContext('2d');
-
-  const sx = (uploadedImage.width - srcSide) / 2;
-  const sy = (uploadedImage.height - srcSide) / 2;
-  tctx.drawImage(uploadedImage, sx, sy, srcSide, srcSide, 0, 0, side, side);
+  tctx.drawImage(uploadedImage, 0, 0, w, h);
 
   const b64 = tmpCanvas.toDataURL('image/png').split(',')[1];
 
