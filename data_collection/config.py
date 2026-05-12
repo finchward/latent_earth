@@ -33,8 +33,8 @@ elif EMBEDDING_METHOD == "fused_hybrid":
     COLOUR_VECTOR_SIZE: int = 192
     # Fusion weights applied to HOG and Colour vectors.
     # 0.5 and 0.866 (sqrt(0.75)) gives a 1:3 ratio of squared influence.
-    FUSION_HOG_WEIGHT: float = float(os.environ.get("FUSION_HOG_WEIGHT", 0.577))
-    FUSION_COLOUR_WEIGHT: float = float(os.environ.get("FUSION_COLOUR_WEIGHT", 0.816))
+    FUSION_HOG_WEIGHT: float = float(os.environ.get("FUSION_HOG_WEIGHT", 0.5))
+    FUSION_COLOUR_WEIGHT: float = float(os.environ.get("FUSION_COLOUR_WEIGHT", 0.866))
     # PCA dimensionality reduction (optional)
     PCA_ENABLED: bool = os.environ.get("PCA_ENABLED", "true").lower() == "true"
     PCA_DIM: int = int(os.environ.get("PCA_DIM", 256))

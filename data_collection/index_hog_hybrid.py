@@ -3,6 +3,7 @@ import sqlite3
 import numpy as np
 from PIL import Image
 from skimage.feature import hog
+from skimage.color import rgb2lab
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from tqdm.auto import tqdm
@@ -39,11 +40,13 @@ if QDRANT_COLLECTION in existing:
     vec_cfg = info.config.params.vectors
     needs_recreate = False
     if isinstance(vec_cfg, dict):
-        hog_size = vec_cfg.get("hog")
-        colour_size = vec_cfg.get("colour")
-        if hog_size is None or colour_size is None:
+        hog_cfg = vec_cfg.get("hog")
+        colour_cfg = vec_cfg.get("colour")
+        if hog_cfg is None or colour_cfg is None:
             needs_recreate = True
-        elif hog_size.size != HOG_VECTOR_SIZE or colour_size.size != COLOUR_VECTOR_SIZE:
+        elif hog_cfg.size != HOG_VECTOR_SIZE or colour_cfg.size != COLOUR_VECTOR_SIZE:
+            needs_recreate = True
+        elif not hog_cfg.on_disk or not colour_cfg.on_disk:
             needs_recreate = True
     else:
         # Old single-vector collection, recreate
@@ -73,11 +76,11 @@ if QDRANT_COLLECTION not in existing:
     qdrant.create_collection(
         collection_name=QDRANT_COLLECTION,
         vectors_config={
-            "hog": VectorParams(size=HOG_VECTOR_SIZE, distance=Distance.EUCLID),
-            "colour": VectorParams(size=COLOUR_VECTOR_SIZE, distance=Distance.EUCLID),
+            "hog": VectorParams(size=HOG_VECTOR_SIZE, distance=Distance.EUCLID, on_disk=True),
+            "colour": VectorParams(size=COLOUR_VECTOR_SIZE, distance=Distance.EUCLID, on_disk=True),
         },
     )
-    print(f"✅ Created fresh Qdrant collection '{QDRANT_COLLECTION}' with named vectors [hog, colour].")
+    print(f"✅ Created fresh Qdrant collection '{QDRANT_COLLECTION}' (On-Disk) with named vectors [hog, colour].")
 
 # ── Feature Computation ──────────────────────────────────────────────────────
 def compute_hog_feature(img: Image.Image) -> np.ndarray:
@@ -117,7 +120,6 @@ def compute_colour_feature(img: Image.Image) -> np.ndarray:
     Using LAB space ensures that Euclidean distance corresponds to perceptual 
     colour difference (Delta E).
     """
-    from skimage.color import rgb2lab
     img_rgb = img.convert("RGB")
     img_small = img_rgb.resize((8, 8), Image.LANCZOS)
     arr_rgb = np.array(img_small, dtype=np.float32) / 255.0

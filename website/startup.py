@@ -25,11 +25,7 @@ def startup_sync() -> None:
     log("1/2  Connecting to Qdrant…")
     os.makedirs(QDRANT_LOCAL_PATH, exist_ok=True)
 
-    # Remove stale lock that may prevent QdrantClient from opening
-    lock_file = os.path.join(QDRANT_LOCAL_PATH, ".lock")
-    if os.path.exists(lock_file):
-        os.remove(lock_file)
-
+    # Open Qdrant Client
     client = QdrantClient(path=QDRANT_LOCAL_PATH)
     existing = [c.name for c in client.get_collections().collections]
 

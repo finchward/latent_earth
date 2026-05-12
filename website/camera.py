@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import io
 
+import numpy as np
 from PIL import Image
 from qdrant_client.models import QueryRequest, Prefetch, FusionQuery, Fusion
 
@@ -44,46 +45,61 @@ def process_camera_frame(b64_str: str) -> list[list[str]]:
 
     print(f"[Camera] Computed {len(vectors)} {EMBEDDING_METHOD.upper()} vectors. Batch searching Qdrant...", flush=True)
 
+    TOP_K = 25
+
+    search_requests: list[QueryRequest] = []
     if EMBEDDING_METHOD == "hog_hybrid":
-        # Fusion query: search both HOG and colour vector spaces, combine with RRF
-        # If the HOG vector is very small (e.g. flat patch with just noise, std < 5.0), fallback to colour only
-        search_requests = []
         for vec in vectors:
-            import numpy as np
             if np.linalg.norm(vec["hog"]) < 50.0:
-                search_requests.append(
-                    QueryRequest(
-                        query=vec["colour"],
-                        using="colour",
-                        limit=1,
-                        with_payload=True
-                    )
-                )
+                # Flat/featureless patch — colour descriptor only
+                search_requests.append(QueryRequest(
+                    query=vec["colour"],
+                    using="colour",
+                    limit=TOP_K,
+                    with_payload=True,
+                ))
             else:
-                search_requests.append(
-                    QueryRequest(
-                        prefetch=[
-                            Prefetch(query=vec["hog"],    using="hog",    limit=500),
-                            Prefetch(query=vec["colour"], using="colour", limit=500),
-                        ],
-                        query=FusionQuery(fusion=Fusion.RRF),
-                        limit=1,
-                        with_payload=True,
-                    )
-                )
+                search_requests.append(QueryRequest(
+                    prefetch=[
+                        Prefetch(query=vec["hog"],    using="hog",    limit=500),
+                        Prefetch(query=vec["colour"], using="colour", limit=500),
+                    ],
+                    query=FusionQuery(fusion=Fusion.RRF),
+                    limit=TOP_K,
+                    with_payload=True,
+                ))
     else:
-        # Single-vector query (hog or dinov2)
-        search_requests = [
-            QueryRequest(query=vec, limit=1, with_payload=True)
-            for vec in vectors.tolist()
-        ]
+        # fused_hybrid, hog, dinov2 — all return an ndarray
+        for vec in vectors:
+            search_requests.append(QueryRequest(
+                query=vec.tolist(),
+                limit=TOP_K,
+                with_payload=True,
+            ))
 
     batch_results = app_state.qdrant.query_batch_points(
         collection_name=QDRANT_COLLECTION,
         requests=search_requests,
     )
 
-    print(f"[Camera] Batch search complete. Building URL grid...", flush=True)
+    print(f"[Camera] Batch search complete. Applying greedy uniqueness + building URL grid...", flush=True)
+
+    # Client-side greedy: prefer the best-match that hasn't been used yet.
+    # This keeps the mosaic visually diverse across the 8×8 grid.
+    used_ids: set = set()
+    chosen_points = []
+    for query_result in batch_results:
+        candidates = query_result.points
+        chosen = None
+        for candidate in candidates:
+            if candidate.id not in used_ids:
+                chosen = candidate
+                break
+        if chosen is None and candidates:
+            chosen = candidates[0]   # duplicate rather than leave blank
+        if chosen is not None:
+            used_ids.add(chosen.id)
+        chosen_points.append(chosen)
 
     # Build the 8×8 grid of image URLs directly from Qdrant payloads.
     # Each payload contains "filename" — no enrichment step needed.
@@ -92,9 +108,9 @@ def process_camera_frame(b64_str: str) -> list[list[str]]:
     for r in range(8):
         row_urls: list[str] = []
         for c in range(8):
-            points = batch_results[idx].points
-            if points:
-                filename = points[0].payload.get("filename", "")
+            point = chosen_points[idx]
+            if point:
+                filename = point.payload.get("filename", "")
                 row_urls.append(f"/images/{filename}" if filename else "")
             else:
                 row_urls.append("")

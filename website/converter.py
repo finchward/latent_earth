@@ -10,9 +10,8 @@ import io
 import os
 
 from PIL import Image, ImageOps
-import random
 import numpy as np
-from qdrant_client.models import Prefetch, FusionQuery, Fusion, Filter, HasIdCondition
+from qdrant_client.models import Prefetch, FusionQuery, Fusion, QueryRequest
 
 from config import DATA_DIR, QDRANT_COLLECTION, EMBEDDING_METHOD
 from embedder import compute_features
@@ -47,107 +46,147 @@ def process_uploaded_image(
     # Decode image
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
-    # Center-crop to square
-    side = min(img.size)
-    img = ImageOps.fit(img, (side, side), centering=(0.5, 0.5))
+    # Cap resolution maintaining aspect ratio
+    w, h = img.size
+    if w > MAX_RESOLUTION or h > MAX_RESOLUTION:
+        scale = MAX_RESOLUTION / max(w, h)
+        w = int(w * scale)
+        h = int(h * scale)
+        img = img.resize((w, h), Image.LANCZOS)
 
-    # Cap resolution
-    if side > MAX_RESOLUTION:
-        img = img.resize((MAX_RESOLUTION, MAX_RESOLUTION), Image.LANCZOS)
-        side = MAX_RESOLUTION
+    # Determine grid dimensions
+    cols = max(1, w // pixels_per_patch)
+    rows = max(1, h // pixels_per_patch)
 
-    # Determine grid
-    n = side // pixels_per_patch
-    if n < 1:
-        n = 1
-
-    # Resize to exact multiple
-    exact_side = n * pixels_per_patch
-    if exact_side != side:
-        img = img.resize((exact_side, exact_side), Image.LANCZOS)
+    # Center-crop to exact grid multiples (the "center boxes and crop" logic)
+    grid_w = cols * pixels_per_patch
+    grid_h = rows * pixels_per_patch
+    left = (w - grid_w) // 2
+    top = (h - grid_h) // 2
+    img = img.crop((left, top, left + grid_w, top + grid_h))
 
     # Slice into patches
     patches = []
-    for r in range(n):
-        for c in range(n):
-            left = c * pixels_per_patch
-            upper = r * pixels_per_patch
-            right = left + pixels_per_patch
-            lower = upper + pixels_per_patch
-            patches.append(img.crop((left, upper, right, lower)))
+    for r in range(rows):
+        for c in range(cols):
+            l = c * pixels_per_patch
+            u = r * pixels_per_patch
+            r_edge = l + pixels_per_patch
+            b_edge = u + pixels_per_patch
+            patches.append(img.crop((l, u, r_edge, b_edge)))
 
-    print(f"[Convert] Sliced into {len(patches)} patches ({n}×{n}). "
+    print(f"[Convert] Sliced into {len(patches)} patches ({cols}×{rows}). "
           f"Computing {EMBEDDING_METHOD.upper()}...", flush=True)
     vectors = compute_features(patches)
 
     print(f"[Convert] Computed {len(vectors)} vectors. Batch searching Qdrant...",
           flush=True)
 
-    # Pair each vector with its original index, then shuffle
-    # This allows us to search in random order (to distribute diversity)
-    # while keeping track of where each result belongs in the grid.
-    indexed_vectors = list(enumerate(vectors if EMBEDDING_METHOD == "hog_hybrid" else vectors.tolist()))
-    random.shuffle(indexed_vectors)
+    TOP_K = 25
+    MAX_ROUNDS = 15  # Search up to Round 4 (offset 100)
 
-    excluded_ids = []
-    results_by_index = {}  # original index → point
+    final_results = [None] * len(vectors)
+    fallbacks = [None] * len(vectors)
+    used_ids: set = set()
+    pending_indices = list(range(len(vectors)))
 
-    for original_idx, vec in indexed_vectors:
-        exclusion_filter = Filter(
-            must_not=[HasIdCondition(has_id=excluded_ids)]
-        ) if excluded_ids else None
+    for round_idx in range(MAX_ROUNDS):
+        if not pending_indices:
+            break
 
-        if EMBEDDING_METHOD == "hog_hybrid":
-            if np.linalg.norm(vec["hog"]) < 50.0:
-                result = app_state.qdrant.query_points(
-                    collection_name=QDRANT_COLLECTION,
-                    query=vec["colour"],
-                    using="colour",
-                    limit=1,
-                    with_payload=True,
-                    query_filter=exclusion_filter,
-                )
+        offset = round_idx * TOP_K
+        if round_idx > 0:
+            print(f"[Convert] Round {round_idx}: Searching for {len(pending_indices)} pending patches (offset={offset})...", flush=True)
+
+        # ── Build QueryRequests for pending patches ───────────────────────────
+        search_requests: list[QueryRequest] = []
+        for idx in pending_indices:
+            vec = vectors[idx]
+            if EMBEDDING_METHOD == "hog_hybrid":
+                if np.linalg.norm(vec["hog"]) < 50.0:
+                    search_requests.append(QueryRequest(
+                        query=vec["colour"],
+                        using="colour",
+                        limit=TOP_K,
+                        offset=offset,
+                        with_payload=True,
+                    ))
+                else:
+                    # Use a larger prefetch limit (500) to ensure RRF fusion
+                    # has enough candidates to rank for deeper rounds.
+                    search_requests.append(QueryRequest(
+                        prefetch=[
+                            Prefetch(query=vec["hog"],    using="hog",    limit=500),
+                            Prefetch(query=vec["colour"], using="colour", limit=500),
+                        ],
+                        query=FusionQuery(fusion=Fusion.RRF),
+                        limit=TOP_K,
+                        offset=offset,
+                        with_payload=True,
+                    ))
             else:
-                result = app_state.qdrant.query_points(
-                    collection_name=QDRANT_COLLECTION,
-                    prefetch=[
-                        Prefetch(query=vec["hog"],    using="hog",    limit=1000),
-                        Prefetch(query=vec["colour"], using="colour", limit=1000),
-                    ],
-                    query=FusionQuery(fusion=Fusion.DBSF),
-                    limit=1,
+                search_requests.append(QueryRequest(
+                    query=vec.tolist(),
+                    limit=TOP_K,
+                    offset=offset,
                     with_payload=True,
-                    query_filter=exclusion_filter,
-                )
-        else:
-            result = app_state.qdrant.query_points(
-                collection_name=QDRANT_COLLECTION,
-                query=vec,
-                limit=1,
-                with_payload=True,
-                query_filter=exclusion_filter,
-            )
+                ))
 
-        if result.points:
-            point = result.points[0]
-            excluded_ids.append(point.id)
-            results_by_index[original_idx] = point
-        else:
-            results_by_index[original_idx] = None  # exhausted the collection
+        # ── Batch round-trip ──────────────────────────────────────────────────
+        batch_results = app_state.qdrant.query_batch_points(
+            collection_name=QDRANT_COLLECTION,
+            requests=search_requests,
+        )
 
-    # Restore original ordering
-    final_results = [results_by_index[i] for i in range(len(vectors))]
+        # ── Greedy Assignment ─────────────────────────────────────────────────
+        newly_resolved = []
+        for i, query_result in enumerate(batch_results):
+            orig_idx = pending_indices[i]
+            candidates = query_result.points
+            
+            # Save fallback from Round 0 (absolute best match)
+            if round_idx == 0 and candidates:
+                fallbacks[orig_idx] = candidates[0]
+
+            chosen = None
+            for candidate in candidates:
+                if candidate.id not in used_ids:
+                    chosen = candidate
+                    break
+            
+            if chosen:
+                final_results[orig_idx] = chosen
+                used_ids.add(chosen.id)
+                newly_resolved.append(orig_idx)
+
+        # Update pending list
+        resolved_count = len(newly_resolved)
+        resolved_set = set(newly_resolved)
+        pending_indices = [idx for idx in pending_indices if idx not in resolved_set]
+
+        if round_idx > 0 or resolved_count < len(batch_results):
+            print(f"[Convert] Round {round_idx} resolved {resolved_count} unique patches. {len(pending_indices)} still pending.", flush=True)
+
+        if not newly_resolved:
+            break
+
+    # ── Final Fallback ────────────────────────────────────────────────────────
+    # For any patches that still didn't find a unique match after all rounds,
+    # use their original best match (duplicate).
+    for idx in pending_indices:
+        final_results[idx] = fallbacks[idx]
+
 
     print(f"[Convert] Search complete. Assembling output image...", flush=True)
 
     # Assemble output
     out_patch = pixels_per_patch * output_scale
-    output = Image.new("RGB", (n * out_patch, n * out_patch))
+    output = Image.new("RGB", (cols * out_patch, rows * out_patch))
     images_dir = os.path.join(DATA_DIR, "images")
 
     idx = 0
-    for r in range(n):
-        for c in range(n):
+    for r in range(rows):
+        for c in range(cols):
             point = final_results[idx]
             if point:
                 filename = point.payload.get("filename", "")
@@ -170,6 +209,6 @@ def process_uploaded_image(
 
     return {
         "image_b64": b64,
-        "grid_rows": n,
-        "grid_cols": n,
+        "grid_rows": rows,
+        "grid_cols": cols,
     }

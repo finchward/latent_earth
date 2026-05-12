@@ -132,10 +132,10 @@ def _load_pca_model():
 
 def compute_fused_hybrid_features(images: list[Image.Image]) -> np.ndarray:
     """
-    Early Fusion: concatenate HOG and Colour vectors with configured weights
-    (0.5 and 0.866 for 1:3 influence), then optionally reduce to PCA_DIM.
-    No independent normalization is applied to preserve edge strength, 
-    allowing Euclidean distance to reflect combined descriptor differences.
+    Early Fusion: independently L2-normalise HOG and Colour vectors, apply
+    configured weights, concatenate into a single 1760-dim vector, and
+    optionally reduce to PCA_DIM via a pre-trained PCA model.
+
     Returns a 2-D np.ndarray of shape (N, VECTOR_SIZE).
     """
     import config
@@ -143,13 +143,22 @@ def compute_fused_hybrid_features(images: list[Image.Image]) -> np.ndarray:
     hog_vecs = compute_hog_features(images)      # (N, 1568) float32
     colour_vecs = compute_colour_features(images) # (N, 192)  float32
 
+    # --- Independent L2 normalisation ----------------------------------------
+    hog_norms = np.linalg.norm(hog_vecs, axis=1, keepdims=True)
+    colour_norms = np.linalg.norm(colour_vecs, axis=1, keepdims=True)
+
+    # Guard against zero-norm vectors (flat / uniform patches)
+    hog_norms = np.where(hog_norms == 0, 1.0, hog_norms)
+    colour_norms = np.where(colour_norms == 0, 1.0, colour_norms)
+
+    hog_normed = hog_vecs / hog_norms
+    colour_normed = colour_vecs / colour_norms
+
     # --- Weighted fusion & concatenation -------------------------------------
-    # We NO LONGER L2-normalise here, as we want to preserve the 'edge strength'
-    # (magnitude) of the HOG features to distinguish flat vs textured patches.
     fused = np.concatenate(
         [
-            config.FUSION_HOG_WEIGHT * hog_vecs,
-            config.FUSION_COLOUR_WEIGHT * colour_vecs,
+            config.FUSION_HOG_WEIGHT * hog_normed,
+            config.FUSION_COLOUR_WEIGHT * colour_normed,
         ],
         axis=1,
     ).astype(np.float32)  # (N, 1760)

@@ -33,9 +33,12 @@ qdrant = QdrantClient(path=QDRANT_PATH)
 existing = {c.name: c for c in qdrant.get_collections().collections}
 if QDRANT_COLLECTION in existing:
     info = qdrant.get_collection(QDRANT_COLLECTION)
-    current_size = info.config.params.vectors.size
-    if current_size != VECTOR_SIZE:
-        print(f"⚠️  Vector size changed ({current_size} → {VECTOR_SIZE}). Recreating collection...")
+    v_params = info.config.params.vectors
+    current_size = v_params.size
+    current_on_disk = v_params.on_disk
+    
+    if current_size != VECTOR_SIZE or not current_on_disk:
+        print(f"⚠️  Vector config changed. Recreating collection...")
         qdrant.delete_collection(QDRANT_COLLECTION)
         del existing[QDRANT_COLLECTION]
         # Reset indexed_dinov2 flags so all images get re-indexed
@@ -48,9 +51,9 @@ if QDRANT_COLLECTION in existing:
 if QDRANT_COLLECTION not in existing:
     qdrant.create_collection(
         collection_name=QDRANT_COLLECTION,
-        vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE, on_disk=True),
     )
-    print(f"✅ Created fresh Qdrant collection '{QDRANT_COLLECTION}'.")
+    print(f"✅ Created fresh Qdrant collection '{QDRANT_COLLECTION}' (On-Disk).")
 
 # ── Process ──────────────────────────────────────────────────────────────────
 def get_unindexed_images():

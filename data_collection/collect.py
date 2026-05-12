@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 import ee
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from global_land_mask import globe
 
 # ── Configuration ────────────────────────────────────────────────────────────
 PROJECT_ID = 'mercari-agent'
@@ -18,12 +19,12 @@ PATCH_SIZE_M = 5000
 IMAGE_SIZE_PX = 500
 COLLECTION = "COPERNICUS/S2_SR_HARMONIZED"
 BANDS = ["B4", "B3", "B2"]          # RGB
-MAX_CLOUD_PCT = 20
-MIN_BRIGHTNESS = 30.0
+MAX_CLOUD_PCT = 100
+MIN_BRIGHTNESS = 0.0
 
 SENTINEL_START = "2017-03-28"
-WINDOW_DAYS = 30
-COLLECTION_WORKERS = 100
+WINDOW_DAYS = 120
+COLLECTION_WORKERS = 80
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 IMG_DIR = os.path.join(DATA_DIR, "images")
@@ -63,28 +64,24 @@ def init_db():
     return conn
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
-_LAND_IMAGE = (
-    ee.Image("JRC/GSW1_4/GlobalSurfaceWater")
-    .select("occurrence")
-    .unmask(0)
-    .lt(50)
-)
+_GRID_CELLS = [
+    (-60 + i * (135 / 18), -180 + j * (360 / 36))
+    for i in range(18) for j in range(36)
+]
+_grid_idx = 0
+_grid_lock = threading.Lock()
 
 def is_land(lat: float, lon: float) -> bool:
-    try:
-        point = ee.Geometry.Point([lon, lat])
-        val = _LAND_IMAGE.sample(region=point, scale=500).first().getInfo()
-        return val is not None and val["properties"].get("occurrence", 0) == 1
-    except Exception as e:
-        print(f"  ❌ [GEE Error in is_land] {e}")
-        return False
+    return globe.is_land(lat, lon)
 
 def random_land_coord() -> tuple[float, float]:
-    sin_min = math.sin(math.radians(-60))
-    sin_max = math.sin(math.radians(75))
+    global _grid_idx
     while True:
-        lon = random.uniform(-180, 180)
-        lat = math.degrees(math.asin(random.uniform(sin_min, sin_max)))
+        with _grid_lock:
+            lat_origin, lon_origin = _GRID_CELLS[_grid_idx % len(_GRID_CELLS)]
+            _grid_idx += 1
+        lat = random.uniform(lat_origin, lat_origin + (135 / 18))
+        lon = random.uniform(lon_origin, lon_origin + (360 / 36))
         if is_land(lat, lon):
             return lat, lon
 
@@ -122,16 +119,20 @@ def fetch_patch(lat: float, lon: float) -> tuple[Image.Image, str] | None:
         ts_ms = scene.date().millis().getInfo()
         scene_date = str(datetime.date.fromtimestamp(ts_ms / 1000))
 
-        img_ee = scene.divide(10000).multiply(255).toByte()
-        url = img_ee.getThumbURL({
+        url = scene.getThumbURL({
             "region": region,
             "dimensions": f"{IMAGE_SIZE_PX}x{IMAGE_SIZE_PX}",
             "format": "png",
             "bands": BANDS,
+            "min": 0,
+            "max": 10000,
         })
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
         img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+        arr = np.array(img, dtype=np.float32)
+        arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-6) * 255
+        img = Image.fromarray(arr.astype(np.uint8))
 
         return (img, scene_date) if is_bright_enough(img) else None
     except Exception as e:
