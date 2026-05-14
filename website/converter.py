@@ -82,7 +82,7 @@ def process_uploaded_image(
     print(f"[Convert] Computed {len(vectors)} vectors. Batch searching Qdrant...",
           flush=True)
 
-    TOP_K = 25
+    TOP_K = 30
     MAX_ROUNDS = 15  # Search up to Round 4 (offset 100)
 
     final_results = [None] * len(vectors)

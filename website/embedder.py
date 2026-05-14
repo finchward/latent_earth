@@ -7,7 +7,12 @@ from __future__ import annotations
 
 import numpy as np
 from PIL import Image
+from concurrent.futures import ThreadPoolExecutor
+from skimage.feature import hog
+from skimage.color import rgb2lab
+import joblib
 
+import config
 from config import EMBEDDING_METHOD
 
 # Globals for DINOv2 lazy loading
@@ -34,34 +39,33 @@ def _init_dinov2():
     _MODEL = AutoModel.from_pretrained(MODEL_NAME).to(_DEVICE)
     _MODEL.eval()
 
+def _compute_single_hog(img: Image.Image) -> np.ndarray:
+    """Helper for parallel HOG computation."""
+    img_gray = img.convert("L")
+    img_resized = img_gray.resize((64, 64))
+    img_arr = np.array(img_resized)
+
+    features = hog(
+        img_arr,
+        orientations=8,
+        pixels_per_cell=(8, 8),
+        cells_per_block=(2, 2),
+        block_norm='L2-Hys',
+        feature_vector=True
+    )
+
+    # Compute overall standard deviation to capture true global edge strength/contrast
+    grad_mag = np.std(img_arr.astype(np.float32))
+    
+    # Scale HOG vector by the gradient magnitude
+    return (features * grad_mag).astype(np.float32)
+
 def compute_hog_features(images: list[Image.Image]) -> np.ndarray:
     """
-    Compute normalised HOG feature vectors for a list of images.
+    Compute normalised HOG feature vectors for a list of images in parallel.
     """
-    from skimage.feature import hog
-    
-    all_features = []
-    for img in images:
-        img_gray = img.convert("L")
-        img_resized = img_gray.resize((128, 128))
-        img_arr = np.array(img_resized)
-
-        features = hog(
-            img_arr,
-            orientations=8,
-            pixels_per_cell=(16, 16),
-            cells_per_block=(2, 2),
-            block_norm='L2-Hys',
-            feature_vector=True
-        )
-
-        # Compute overall standard deviation to capture true global edge strength/contrast
-        grad_mag = np.std(img_arr.astype(np.float32))
-        
-        # Scale HOG vector by the gradient magnitude
-        features = features * grad_mag
-            
-        all_features.append(features.astype(np.float32))
+    with ThreadPoolExecutor() as executor:
+        all_features = list(executor.map(_compute_single_hog, images))
         
     return np.array(all_features)
 
@@ -84,25 +88,20 @@ def compute_dinov2_features(images: list[Image.Image]) -> np.ndarray:
 def compute_colour_features(images: list[Image.Image]) -> np.ndarray:
     """
     Compute spatial colour descriptors in LAB space by resizing to 8x8 and flattening.
-    
-    Using LAB space ensures that Euclidean distance corresponds to perceptual 
-    colour difference (Delta E).
+    Uses vectorized conversion for speed.
     """
-    from skimage.color import rgb2lab
-    all_features = []
-    for img in images:
-        img_rgb = img.convert("RGB")
-        img_small = img_rgb.resize((8, 8), Image.LANCZOS)
-        arr_rgb = np.array(img_small, dtype=np.float32) / 255.0
-        
-        # Convert to LAB space
-        arr_lab = rgb2lab(arr_rgb)
-        
-        # Flatten to (192,) vector
-        features = arr_lab.flatten().astype(np.float32)
-        all_features.append(features)
+    # 1. Resize all images to 8x8 using fast Bilinear filtering
+    # and stack into a single (N, 8, 8, 3) array.
+    batch_rgb = np.zeros((len(images), 8, 8, 3), dtype=np.float32)
+    for i, img in enumerate(images):
+        img_small = img.convert("RGB").resize((8, 8), Image.BILINEAR)
+        batch_rgb[i] = np.array(img_small, dtype=np.float32) / 255.0
     
-    return np.array(all_features, dtype=np.float32)
+    # 2. Vectorized LAB conversion (much faster than looping)
+    batch_lab = rgb2lab(batch_rgb)
+    
+    # 3. Flatten to (N, 192) vectors
+    return batch_lab.reshape(len(images), -1).astype(np.float32)
 
 def compute_hog_hybrid_features(images: list[Image.Image]) -> list[dict]:
     """
@@ -122,8 +121,7 @@ def _load_pca_model():
     global _PCA_MODEL
     if _PCA_MODEL is not None:
         return _PCA_MODEL
-    import joblib
-    import config
+    
     print(f"[Embedder] Loading PCA model from {config.PCA_MODEL_PATH}...", flush=True)
     _PCA_MODEL = joblib.load(config.PCA_MODEL_PATH)
     print(f"[Embedder] PCA model loaded (→ {config.PCA_DIM} dims).", flush=True)
@@ -173,7 +171,7 @@ def compute_features(images: list[Image.Image]):
         return compute_dinov2_features(images)
     elif EMBEDDING_METHOD == "hog_hybrid":
         return compute_hog_hybrid_features(images)
-    elif EMBEDDING_METHOD == "fused_hybrid":
+    elif EMBEDDING_METHOD == "fused_hybrid" or EMBEDDING_METHOD == "fused_hybrid_1_3":
         return compute_fused_hybrid_features(images)
     else:
         raise ValueError(f"Unknown EMBEDDING_METHOD: {EMBEDDING_METHOD}")

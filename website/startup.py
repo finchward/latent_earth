@@ -10,7 +10,13 @@ import os
 
 from qdrant_client import QdrantClient
 
-from config import PORT, QDRANT_COLLECTION, QDRANT_LOCAL_PATH
+from config import (
+    PORT,
+    QDRANT_COLLECTION,
+    QDRANT_LOCAL_PATH,
+    QDRANT_PREFER_SERVER,
+    QDRANT_URL,
+)
 from state import app_state, log
 
 
@@ -23,10 +29,15 @@ def startup_sync() -> None:
 
     # ── Open Qdrant ───────────────────────────────────────────────────────────
     log("1/2  Connecting to Qdrant…")
-    os.makedirs(QDRANT_LOCAL_PATH, exist_ok=True)
 
-    # Open Qdrant Client
-    client = QdrantClient(path=QDRANT_LOCAL_PATH)
+    if QDRANT_PREFER_SERVER:
+        log(f"  → Server mode: {QDRANT_URL}")
+        client = QdrantClient(url=QDRANT_URL)
+    else:
+        log(f"  → Local mode: {QDRANT_LOCAL_PATH}")
+        os.makedirs(QDRANT_LOCAL_PATH, exist_ok=True)
+        client = QdrantClient(path=QDRANT_LOCAL_PATH)
+
     existing = [c.name for c in client.get_collections().collections]
 
     if QDRANT_COLLECTION not in existing:
